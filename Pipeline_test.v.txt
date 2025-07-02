@@ -1,0 +1,95 @@
+module mips_testbench;
+
+    // Declare signals to connect to the processor module inputs
+    reg clk1;
+    reg clk2;
+
+    // Instantiate the processor module
+    // The processor module's internal registers and memory are accessed directly for initialization/display in the testbench.
+    // In a real scenario, you might have separate interfaces for these.
+    processor mips_processor(
+        .clk1(clk1),
+        .clk2(clk2)
+    );
+
+    // Clock Generation: A two-phase clock is used for this pipeline
+    // clk1 and clk2 are generated alternately.
+    initial begin
+        clk1 = 0; // Initialize clk1 [15]
+        clk2 = 0; // Initialize clk2 [15]
+        // Generate clk1 with a period of 10ns (5ns high, 5ns low)
+        forever #5 clk1 = ~clk1; // Example: #5 for a 10ns period. [15]
+    end
+
+    initial begin
+        // clk2 is offset by half a clock cycle from clk1.
+        #2.5 clk2 = 1; // Start clk2 high after 2.5ns (half of clk1's high phase)
+        forever #5 clk2 = ~clk2;
+    end
+
+    // Initialisation and Program Loading
+    initial begin
+        // Initialise all registers (R0 to R31) to their index value (e.g., R0=0, R1=1, etc.) [16]
+        for (integer k = 0; k < 32; k = k + 1) begin
+            mips_processor.regfile[k] = k;
+        end
+
+        // Initialise control flags [18]
+        mips_processor.HALTED = 0;
+        mips_processor.TAKEN_BRANCH = 0;
+
+        // Set Program Counter to start at address 0 [3, 18]
+        mips_processor.PC = 0;
+
+        // Load the program instructions (machine code in hexadecimal) into memory [4, 7, 17]
+        // This program adds 10, 20, 25, then adds (10+20) to 25.
+        // The source mentions the need for dummy instructions to handle data hazards. [12, 16, 49]
+        // The 'or r7 r7 r7' instruction is used as a dummy instruction [16, 17].
+
+        // 1. ADDI R1, R0, 10 (R1 = 10) [6]
+        mips_processor.mem = 32'h2801000A; // Opcode: ADDI, Rs: R0 (0), Rt: R1 (1), Imm: 10 [8, 10]
+        // 2. ADDI R2, R0, 20 (R2 = 20) [6]
+        mips_processor.mem[50] = 32'h28020014; // Opcode: ADDI, Rs: R0 (0), Rt: R2 (2), Imm: 20 [8]
+        // 3. ADDI R3, R0, 25 (R3 = 25) [6]
+        mips_processor.mem[51] = 32'h28030019; // Opcode: ADDI, Rs: R0 (0), Rt: R3 (3), Imm: 25 [9]
+        // 4. ADD R4, R1, R2 (R4 = R1 + R2 = 10 + 20 = 30) [6]
+        mips_processor.mem[52] = 32'h00222000; // Opcode: ADD, Rs: R1 (1), Rt: R2 (2), Rd: R4 (4) [9]
+
+        // 5. Dummy instruction due to R4 dependency (R4 is written in WB, but used in next instruction's ID stage) [14-17]
+        // The source code example shows two dummy instructions after ADD R4, R1, R2, and one after ADD R5, R4, R3 [17].
+        // This testbench uses 'OR R7, R7, R7' (0x00ED3800) as a dummy instruction [16, 17].
+        mips_processor.mem[53] = 32'h00ED3800; // OR R7, R7, R7
+        mips_processor.mem[54] = 32'h00ED3800; // OR R7, R7, R7
+
+        // 6. ADD R5, R4, R3 (R5 = R4 + R3 = 30 + 25 = 55) [7]
+        mips_processor.mem[55] = 32'h00832800; // Opcode: ADD, Rs: R4 (4), Rt: R3 (3), Rd: R5 (5) [9]
+
+        // 7. Dummy instruction due to R5 dependency [14-17]
+        mips_processor.mem[56] = 32'h00ED3800; // OR R7, R7, R7
+
+        // 8. HLT (Halt execution) [7]
+        mips_processor.mem[57] = 32'h3FFFFFFF; // Opcode: HLT (all ones) [9, 51]
+
+        // Start the simulation after a small delay
+        #10;
+
+        // Dump waveforms for analysis [19]
+        $dumpfile("mips.vcd");
+        $dumpvars(0, mips_testbench);
+
+        // Run simulation for a sufficient number of clock cycles or until HALTED [15]
+        // The source indicates 20 clock cycles are sufficient for this program.
+        #200; // Run for 200ns, which is 20 clock cycles for a 10ns period.
+
+        // Display the final register values [18, 19]
+        $display("--- Simulation Results ---");
+        for (integer i = 0; i <= 5; i = i + 1) begin
+            $display("Register %0d: %0d (0x%h)", i, mips_processor.regfile[i], mips_processor.regfile[i]);
+        end
+        $display("Halted Flag: %0d", mips_processor.HALTED);
+
+        // Finish simulation
+        $finish;
+    end
+
+endmodule
